@@ -110,7 +110,7 @@ if not host:
     st.info("Please add the Host address to continue.")
     st.stop()
 
-system = st.sidebar.text_area("System", value="You are a helpful assistant. Answer in no more than 40 words and in english.")
+system = st.sidebar.text_area("System", value="You are a helpful assistant expert in XXX. Answer in no more than 40 words, always in spanish.")
 
 uploaded_files = st.sidebar.file_uploader(
     label="Upload PDF files", type=["pdf"], accept_multiple_files=True
