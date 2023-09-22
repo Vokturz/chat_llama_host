@@ -1,6 +1,5 @@
 langchain
 pypdf
-chromadb
 streamlit
 openai
-pysqlite3-binary
+weaviate-client

@@ -1,7 +1,3 @@
-__import__('pysqlite3')
-import sys
-sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
-
 import os
 import tempfile
 import streamlit as st
@@ -12,8 +8,8 @@ from langchain.memory.chat_message_histories import StreamlitChatMessageHistory
 from langchain.embeddings import LocalAIEmbeddings
 from langchain.callbacks.base import BaseCallbackHandler
 from langchain.chains import ConversationalRetrievalChain
-from langchain.vectorstores import Chroma
-from chromadb.config import Settings
+from langchain.vectorstores import Weaviate
+import weaviate
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.prompts.prompt import PromptTemplate
 
@@ -35,23 +31,15 @@ Helpful Answer: [/INST]"""
 qa_prompt = PromptTemplate.from_template(prompt_template)
 
 st.set_page_config(page_title="Chat with Documents")
+
+system = st.text_area("System", value="You are a helpful assistant expert in CHANGE_ME. Answer always in spanish.")
+
+
 st.title("Chat with Documents")
 
-@st.cache_resource
-def get_vectordb(host):
-    embeddings = LocalAIEmbeddings(openai_api_key="NONE",
-                                   openai_api_base=f"http://{host}:8090/v1")
-    
-    chroma_settings = Settings(chroma_api_impl="chromadb.api.fastapi.FastAPI",
-                               chroma_server_host=host,
-                               chroma_server_http_port="8000",
-                               anonymized_telemetry=False)
-    return Chroma(collection_name="agent_example",
-                  client_settings=chroma_settings,
-                  embedding_function=embeddings)
 
 @st.cache_resource(ttl="1h")
-def configure_retriever(uploaded_files, host):
+def configure_retriever(uploaded_files, host, k, index_name):
     # Read documents
     docs = []
     temp_dir = tempfile.TemporaryDirectory()
@@ -63,15 +51,25 @@ def configure_retriever(uploaded_files, host):
         docs.extend(loader.load())
 
     # Split documents
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=200)
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
     splits = text_splitter.split_documents(docs)
 
-    # Create embeddings and store in vectordb
-    vectordb = get_vectordb(host)
-    vectordb.add_documents(splits, collection_name="agent_example")
+    embeddings = LocalAIEmbeddings(openai_api_key="NONE",
+                                   openai_api_base=f"http://{host}:8090/v1")
+
+
+    
+    # Add documents
+    vectordb = Weaviate.from_documents(splits, embeddings, weaviate_url=f"http://{host}:8000",
+                index_name=index_name, by_text=False)
+
+    # Load all documents
+    client = weaviate.Client(f"http://{host}:8000")
+    vectordb = Weaviate(client=client, index_name=index_name, text_key="text",
+                         embedding=embeddings, by_text=False, attributes=["source"])
 
     # Define retriever
-    retriever = vectordb.as_retriever(search_type="mmr", search_kwargs={"k": 2, "fetch_k": 4})
+    retriever = vectordb.as_retriever(kwargs={'k': k})
 
     return retriever
 
@@ -114,20 +112,50 @@ if not host:
     st.info("Please add the Host address to continue.")
     st.stop()
 
-system = st.sidebar.text_area("System", value="You are a helpful assistant expert in CHANGE_ME. Answer in no more than 40 words, always in spanish.")
+k = st.sidebar.number_input("retrieved chunks", value=4, min_value=2, max_value=8)
+
+index_name = st.sidebar.text_input("Index name")
+if not index_name:
+    st.info("Please add an index name to continue.")
+    st.stop()
+
+# Check if there are files
+client = weaviate.Client(f"http://{host}:8000")
+
+# index_name must be capitalized
+index_name = index_name.capitalize()
+index_exists = client.schema.exists(index_name)
+files = []
+if index_exists:
+    st.sidebar.write(f"Index _{index_name}_ contains the following files.")
+    for obj in client.data_object.get(class_name = index_name)['objects']:
+        file = obj['properties']['source'].split('/')[-1]
+        if file not in files:
+            files.append(file)
+            st.sidebar.markdown(f"- _{file}_")
+
 
 uploaded_files = st.sidebar.file_uploader(
     label="Upload PDF files", type=["pdf"], accept_multiple_files=True
 )
-if not uploaded_files:
+
+if not uploaded_files and not index_exists:
     st.info("Please upload PDF documents to continue.")
     st.stop()
 
-retriever = configure_retriever(uploaded_files, host)
+for file in uploaded_files:
+    if file.name in files:
+        st.error(f"File {file.name} already exists.")
+        st.stop()
+
+
+retriever = configure_retriever(uploaded_files, host, k, index_name)
 
 # Setup memory for contextual conversation
 msgs = StreamlitChatMessageHistory()
 memory = ConversationBufferMemory(memory_key="chat_history", chat_memory=msgs, return_messages=True)
+
+
 
 # Setup LLM and QA chain
 llm = VLLMOpenAI(
@@ -135,7 +163,8 @@ llm = VLLMOpenAI(
     openai_api_key="NONE",
     openai_api_base=f"http://{host}/v1",
     temperature=0,
-    streaming=True
+    streaming=True,
+    max_tokens=512,
 )
 qa_chain = ConversationalRetrievalChain.from_llm(
     llm, retriever=retriever, memory=memory, verbose=False,
@@ -143,9 +172,17 @@ qa_chain = ConversationalRetrievalChain.from_llm(
     combine_docs_chain_kwargs={'prompt': qa_prompt.partial(system=system)}
 )
 
+
 if len(msgs.messages) == 0 or st.sidebar.button("Clear message history"):
     msgs.clear()
     msgs.add_ai_message("How can I help you?")
+
+if st.sidebar.button("⚠️ **Delete Index**"):
+    try:
+        client.schema.delete_class(index_name)
+        st.experimental_rerun()
+    except:
+        pass
 
 avatars = {"human": "user", "ai": "assistant"}
 for msg in msgs.messages:
