@@ -13,13 +13,15 @@ import weaviate
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.prompts.prompt import PromptTemplate
 
+st.set_page_config(page_title="Chat with Documents", layout="wide")
+
+
 _template = """[INST] <<SYS>> Given the following conversation and a follow up question, rephrase the follow up question to be a standalone question. <</SYS>>
 
 Chat History:
 {chat_history}
 Follow Up Input: {question}
 Standalone question: [/INST]"""
-condense_question_prompt = PromptTemplate.from_template(_template)
 
 prompt_template = """[INST] <<SYS>> {system}
 Use the following pieces of context to answer the question at the end. If you don't know the answer, just say that you don't know, don't try to make up an answer.
@@ -28,18 +30,20 @@ Use the following pieces of context to answer the question at the end. If you do
 
 Question: {question}
 Helpful Answer: [/INST]"""
+
+
+col1, col2, col3 = st.columns(3)
+system = col1.text_area("System", value="You are a helpful assistant expert in CHANGE_ME. Answer always in spanish.", height=160)
+_template = col2.text_area("Condensed Question Template", value=_template, height=200)
+prompt_template = col3.text_area("Prompt Template", value=prompt_template, height=200)
+
 qa_prompt = PromptTemplate.from_template(prompt_template)
-
-st.set_page_config(page_title="Chat with Documents")
-
-system = st.text_area("System", value="You are a helpful assistant expert in CHANGE_ME. Answer always in spanish.")
-
-
+condense_question_prompt = PromptTemplate.from_template(_template)
 st.title("Chat with Documents")
 
 
 @st.cache_resource(ttl="1h")
-def configure_retriever(uploaded_files, host, k, index_name):
+def configure_retriever(uploaded_files, host, index_name):
     # Read documents
     docs = []
     temp_dir = tempfile.TemporaryDirectory()
@@ -69,8 +73,7 @@ def configure_retriever(uploaded_files, host, k, index_name):
                          embedding=embeddings, by_text=False, attributes=["source"])
 
     # Define retriever
-    retriever = vectordb.as_retriever(kwargs={'k': k})
-
+    retriever = vectordb.as_retriever(kwargs={'k': 4})
     return retriever
 
 
@@ -107,12 +110,10 @@ class PrintRetrievalHandler(BaseCallbackHandler):
             self.status.markdown(doc.page_content)
         self.status.update(state="complete")
 
-host = st.sidebar.text_input("Host")
+host = st.sidebar.text_input("Host", value="3.138.172.55")
 if not host:
     st.info("Please add the Host address to continue.")
     st.stop()
-
-k = st.sidebar.number_input("retrieved chunks", value=4, min_value=2, max_value=8)
 
 index_name = st.sidebar.text_input("Index name")
 if not index_name:
@@ -143,19 +144,17 @@ if not uploaded_files and not index_exists:
     st.info("Please upload PDF documents to continue.")
     st.stop()
 
-for file in uploaded_files:
-    if file.name in files:
-        st.error(f"File {file.name} already exists.")
-        st.stop()
+# for file in uploaded_files:
+#     if file.name in files:
+#         st.error(f"File {file.name} already exists.")
+#         st.stop()
 
 
-retriever = configure_retriever(uploaded_files, host, k, index_name)
+retriever = configure_retriever(uploaded_files, host, index_name)
 
 # Setup memory for contextual conversation
 msgs = StreamlitChatMessageHistory()
 memory = ConversationBufferMemory(memory_key="chat_history", chat_memory=msgs, return_messages=True)
-
-
 
 # Setup LLM and QA chain
 llm = VLLMOpenAI(
@@ -178,11 +177,10 @@ if len(msgs.messages) == 0 or st.sidebar.button("Clear message history"):
     msgs.add_ai_message("How can I help you?")
 
 if st.sidebar.button("⚠️ **Delete Index**"):
-    try:
-        client.schema.delete_class(index_name)
-        st.experimental_rerun()
-    except:
-        pass
+    client.schema.delete_class(index_name)
+    msgs.clear()
+    msgs.add_ai_message("How can I help you?")
+    st.rerun()
 
 avatars = {"human": "user", "ai": "assistant"}
 for msg in msgs.messages:
