@@ -21,15 +21,15 @@ _template = """[INST] <<SYS>> Given the following conversation and a follow up q
 Chat History:
 {chat_history}
 Follow Up Input: {question}
-Standalone question: [/INST]"""
+[/INST] Standalone question:"""
 
 prompt_template = """[INST] <<SYS>> {system}
 Use the following pieces of context to answer the question at the end. If you don't know the answer, just say that you don't know, don't try to make up an answer.
 
-{context}
+{context} <</SYS>>
 
 Question: {question}
-Helpful Answer: [/INST]"""
+[/INST] Helpful Answer: """
 
 
 col1, col2, col3 = st.columns(3)
@@ -55,7 +55,7 @@ def configure_retriever(uploaded_files, host, index_name):
         docs.extend(loader.load())
 
     # Split documents
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=400, chunk_overlap=100)
     splits = text_splitter.split_documents(docs)
 
     embeddings = LocalAIEmbeddings(openai_api_key="NONE",
@@ -166,7 +166,7 @@ llm = VLLMOpenAI(
     max_tokens=512,
 )
 qa_chain = ConversationalRetrievalChain.from_llm(
-    llm, retriever=retriever, memory=memory, verbose=False,
+    llm, retriever=retriever, memory=memory, verbose=True,
     condense_question_prompt = condense_question_prompt,
     combine_docs_chain_kwargs={'prompt': qa_prompt.partial(system=system)}
 )
